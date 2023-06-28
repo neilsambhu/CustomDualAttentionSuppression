@@ -35,14 +35,14 @@ with tf.GradientTape() as tape1:
     tape1.watch(features)
     predictions = model.output[0, predicted_class_index]
 
-grads1 = tape1.gradient(predictions, features)
+grads1 = tape1.gradient(predictions, tf.identity(features))
 
 with tf.GradientTape() as tape2:
     features = tf.convert_to_tensor(feature_maps)
     tape2.watch(features)
     predictions = model.output[0, predicted_class_index]
 
-grads2 = tape2.gradient(predictions, features)
+grads2 = tape2.gradient(predictions, tf.identity(features))
 
 # Compute the channel-wise weights using global average pooling
 channel_weights = tf.reduce_mean(tf.reduce_sum([grads1, grads2], axis=0), axis=(0, 1, 2))
