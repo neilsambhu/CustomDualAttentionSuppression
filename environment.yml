@@ -1,0 +1,10 @@
+name: customDAS
+channels:
+  - defaults
+dependencies:
+  - python=3.8
+  - torchvision
+  - pytorch
+  - torchaudio
+  - pytorch-cuda=11.8
+prefix: /home/nsambhu/anaconda3/envs/customDAS
