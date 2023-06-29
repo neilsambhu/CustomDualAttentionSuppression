@@ -1,81 +1,69 @@
+import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-from tensorflow.keras.preprocessing import image
-from tensorflow.keras.applications.inception_v3 import InceptionV3, preprocess_input, decode_predictions
-from tensorflow.keras.models import Model
-import tensorflow.keras.backend as K
-import tensorflow as tf
-import cv2
 
-# Load pre-trained Inception-V3 model
+from tensorflow.keras.applications.inception_v3 import InceptionV3
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.applications.inception_v3 import preprocess_input, decode_predictions
+
+# Load the InceptionV3 model pre-trained on ImageNet
 model = InceptionV3(weights='imagenet')
 
-# Load and preprocess the image
+# Load and preprocess the input image
 img_path = 'images/n01440764_tench.JPEG'
 img = image.load_img(img_path, target_size=(299, 299))
 x = image.img_to_array(img)
 x = np.expand_dims(x, axis=0)
 x = preprocess_input(x)
 
-# Define the desired output layer for Grad-CAM
-output_layer = model.layers[-1].output
+# Make predictions on the image
+preds = model.predict(x)
+predicted_class = np.argmax(preds[0])
+predicted_class_name = decode_predictions(preds, top=1)[0][0][1]
 
-# Create a new model that maps the input image to the desired output layer
-gradcam_model = Model(inputs=model.input, outputs=[output_layer, model.get_layer('mixed10').output])
+# Get the output tensor of the last convolutional layer in the model
+last_conv_layer = model.get_layer('mixed10')
 
-# Obtain the predictions and intermediate feature maps for the input image
-output, feature_maps = gradcam_model.predict(x)
+# Create a model that outputs both the predictions and the output tensor of the last conv layer
+grad_model = tf.keras.models.Model(inputs=model.input, outputs=(model.output, last_conv_layer.output))
 
-# Get the predicted class index
-predicted_class_index = np.argmax(output[0])
+# Compute the gradient of the predicted class with respect to the output tensor of the last conv layer
+with tf.GradientTape() as tape:
+    preds, last_conv_output = grad_model(x)
+    class_output = preds[:, predicted_class]
+grads = tape.gradient(class_output, last_conv_output)
 
-# Obtain the gradient of the predicted class with respect to the intermediate feature maps
-with tf.GradientTape() as tape1:
-    features = tf.convert_to_tensor(feature_maps)
-    tape1.watch(features)
-    predictions = model.output[0, predicted_class_index]
+# Compute the channel-wise mean of the gradients
+pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
 
-grads1 = tape1.gradient(predictions, tf.identity(features))
+# Multiply each channel in the feature map array by the corresponding gradient value
+last_conv_output = last_conv_output[0]
+heatmap = last_conv_output @ pooled_grads[..., tf.newaxis]
+heatmap = tf.squeeze(heatmap)
 
-with tf.GradientTape() as tape2:
-    features = tf.convert_to_tensor(feature_maps)
-    tape2.watch(features)
-    predictions = model.output[0, predicted_class_index]
+# Apply ReLU to the heatmap
+heatmap = tf.nn.relu(heatmap)
 
-grads2 = tape2.gradient(predictions, tf.identity(features))
+# Normalize the heatmap
+heatmap /= tf.reduce_max(heatmap)
 
-# Compute the channel-wise weights using global average pooling
-channel_weights = tf.reduce_mean(tf.reduce_sum([grads1, grads2], axis=0), axis=(0, 1, 2))
+# Resize the heatmap to the size of the original image
+heatmap = tf.image.resize(heatmap, (tf.shape(img)[1], tf.shape(img)[0]))
 
-# Compute the weighted combination of the feature maps
-weighted_feature_maps = tf.reduce_sum(tf.multiply(channel_weights, feature_maps), axis=-1)
-
-# Normalize the attention map
-gradcam = np.maximum(weighted_feature_maps, 0)
-gradcam /= np.max(gradcam)
-
-# Resize the attention map to match the input image size
-gradcam = cv2.resize(gradcam, (img.shape[1], img.shape[0]))
-
-# Convert the attention map to a heatmap
-heatmap = cv2.applyColorMap(np.uint8(255 * gradcam), cv2.COLORMAP_JET)
+# Convert the heatmap to RGB
+heatmap = tf.expand_dims(heatmap, axis=-1)
+heatmap_rgb = tf.image.grayscale_to_rgb(heatmap)
 
 # Superimpose the heatmap on the original image
-superimposed_img = cv2.addWeighted(cv2.cvtColor(np.uint8(img), cv2.COLOR_RGB2BGR), 0.6, heatmap, 0.4, 0)
+superimposed_img = heatmap_rgb * 0.4 + img
 
-# Display the original image, attention map, and superimposed image
-plt.figure(figsize=(12, 6))
-plt.subplot(131)
-plt.imshow(img)
-plt.title('Original Image')
-plt.axis('off')
-plt.subplot(132)
-plt.imshow(heatmap)
-plt.title('Attention Map')
-plt.axis('off')
-plt.subplot(133)
-plt.imshow(superimposed_img)
-plt.title('Superimposed Image')
-plt.axis('off')
+# Plot the original image, heatmap, and superimposed image
+fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+axes[0].imshow(img)
+axes[0].set_title('Original Image')
+axes[1].imshow(heatmap, cmap='jet')
+axes[1].set_title('Attention Heatmap')
+axes[2].imshow(superimposed_img / 255.0)
+axes[2].set_title('Superimposed Image')
 plt.tight_layout()
 plt.show()
